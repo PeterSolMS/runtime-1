@@ -2869,6 +2869,11 @@ protected:
 #endif
 #endif //MULTIPLE_HEAPS
 
+#ifdef MARK_LIST
+    PER_HEAP_ISOLATED
+    void grow_mark_list();
+#endif //MARK_LIST
+
 #ifdef BACKGROUND_GC
 
     PER_HEAP

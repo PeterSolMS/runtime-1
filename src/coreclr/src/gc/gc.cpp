@@ -8511,6 +8511,53 @@ void gc_heap::combine_mark_lists()
 }
 #endif // PARALLEL_MARK_LIST_SORT
 #endif //MULTIPLE_HEAPS
+
+void gc_heap::grow_mark_list()
+{
+    size_t new_mark_list_size = min (mark_list_size * 2, 1000 * 1024);
+    if (new_mark_list_size == mark_list_size)
+        return;
+
+#ifdef MULTIPLE_HEAPS
+    uint8_t** new_mark_list = make_mark_list (new_mark_list_size * n_heaps);
+
+#ifdef PARALLEL_MARK_LIST_SORT
+    uint8_t** new_mark_list_copy = make_mark_list (new_mark_list_size * n_heaps);
+#endif //PARALLEL_MARK_LIST_SORT
+
+    if (new_mark_list != nullptr
+#ifdef PARALLEL_MARK_LIST_SORT
+        && new_mark_list_copy != nullptr
+#endif //PARALLEL_MARK_LIST_SORT
+        )
+    {
+        delete[] g_mark_list;
+        g_mark_list = new_mark_list;
+#ifdef PARALLEL_MARK_LIST_SORT
+        delete[] g_mark_list_copy;
+        g_mark_list_copy = new_mark_list_copy;
+#endif //PARALLEL_MARK_LIST_SORT
+        mark_list_size = new_mark_list_size;
+    }
+    else
+    {
+        delete[] new_mark_list;
+#ifdef PARALLEL_MARK_LIST_SORT
+        delete[] new_mark_list_copy;
+#endif //PARALLEL_MARK_LIST_SORT
+    }
+
+#else //MULTIPLE_HEAPS
+    uint8_t** new_mark_list = make_mark_list (new_mark_list_size);
+    if (new_mark_list != nullptr)
+    {
+        delete[] mark_list;
+        mark_list = new_mark_list;
+        mark_list_size = new_mark_list_size;
+    }
+#endif //MULTIPLE_HEAPS
+}
+
 #endif //MARK_LIST
 
 class seg_free_spaces
@@ -36588,12 +36635,30 @@ void gc_heap::do_post_gc()
             (compact_or_sweep_gcs[1])++;
     }
 
+    bool had_mark_list_overflow = false;
 #ifdef MULTIPLE_HEAPS
     for (int i = 0; i < n_heaps; i++)
+    {
         g_heaps[i]->record_interesting_info_per_heap();
+
+        if ((settings.condemned_generation < max_generation) &&
+            (g_heaps[i]->mark_list_index > g_heaps[i]->mark_list_end))
+        {
+            had_mark_list_overflow = true;
+        }
+    }
 #else
+    if ((settings.condemned_generation < max_generation) &&
+        (mark_list_index > mark_list_end))
+    {
+        had_mark_list_overflow = true;
+    }
+
     record_interesting_info_per_heap();
 #endif //MULTIPLE_HEAPS
+    if (had_mark_list_overflow)
+        grow_mark_list ();
+
     record_global_mechanisms();
 #endif //GC_CONFIG_DRIVEN
 }
