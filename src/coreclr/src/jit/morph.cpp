@@ -63,38 +63,41 @@ GenTree* Compiler::fgMorphIntoHelperCall(GenTree* tree, int helper, GenTreeCall:
     // The helper call ought to be semantically equivalent to the original node, so preserve its VN.
     tree->ChangeOper(GT_CALL, GenTree::PRESERVE_VN);
 
-    tree->AsCall()->gtCallType            = CT_HELPER;
-    tree->AsCall()->gtCallMethHnd         = eeFindHelper(helper);
-    tree->AsCall()->gtCallThisArg         = nullptr;
-    tree->AsCall()->gtCallArgs            = args;
-    tree->AsCall()->gtCallLateArgs        = nullptr;
-    tree->AsCall()->fgArgInfo             = nullptr;
-    tree->AsCall()->gtRetClsHnd           = nullptr;
-    tree->AsCall()->gtCallMoreFlags       = 0;
-    tree->AsCall()->gtInlineCandidateInfo = nullptr;
-    tree->AsCall()->gtControlExpr         = nullptr;
+    GenTreeCall* call = tree->AsCall();
+
+    call->gtCallType            = CT_HELPER;
+    call->gtCallMethHnd         = eeFindHelper(helper);
+    call->gtCallThisArg         = nullptr;
+    call->gtCallArgs            = args;
+    call->gtCallLateArgs        = nullptr;
+    call->fgArgInfo             = nullptr;
+    call->gtRetClsHnd           = nullptr;
+    call->gtCallMoreFlags       = 0;
+    call->gtInlineCandidateInfo = nullptr;
+    call->gtControlExpr         = nullptr;
 
 #if DEBUG
     // Helper calls are never candidates.
 
-    tree->AsCall()->gtInlineObservation = InlineObservation::CALLSITE_IS_CALL_TO_HELPER;
+    call->gtInlineObservation = InlineObservation::CALLSITE_IS_CALL_TO_HELPER;
 #endif // DEBUG
 
 #ifdef FEATURE_READYTORUN_COMPILER
-    tree->AsCall()->gtEntryPoint.addr       = nullptr;
-    tree->AsCall()->gtEntryPoint.accessType = IAT_VALUE;
+    call->gtEntryPoint.addr       = nullptr;
+    call->gtEntryPoint.accessType = IAT_VALUE;
 #endif
 
+#if FEATURE_MULTIREG_RET
+    call->ResetReturnType();
+    call->ClearOtherRegs();
+    call->ClearOtherRegFlags();
 #ifndef TARGET_64BIT
     if (varTypeIsLong(tree))
     {
-        GenTreeCall*    callNode    = tree->AsCall();
-        ReturnTypeDesc* retTypeDesc = callNode->GetReturnTypeDesc();
-        retTypeDesc->Reset();
-        retTypeDesc->InitializeLongReturnType(this);
-        callNode->ClearOtherRegs();
+        call->InitializeLongReturnType();
     }
 #endif // !TARGET_64BIT
+#endif // FEATURE_MULTIREG_RET
 
     if (tree->OperMayThrow(this))
     {
@@ -115,7 +118,7 @@ GenTree* Compiler::fgMorphIntoHelperCall(GenTree* tree, int helper, GenTreeCall:
 
     if (morphArgs)
     {
-        tree = fgMorphArgs(tree->AsCall());
+        tree = fgMorphArgs(call);
     }
 
     return tree;
@@ -3665,31 +3668,21 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* call)
 #else  // UNIX_AMD64_ABI
                     // On Unix, structs are always passed by value.
                     // We only need a copy if we have one of the following:
-                    // - We have a lclVar that has been promoted and is passed in registers.
                     // - The sizes don't match for a non-lclVar argument.
                     // - We have a known struct type (e.g. SIMD) that requires multiple registers.
-                    // TODO-Amd64-Unix-CQ: The first case could and should be handled without copies.
                     // TODO-Amd64-Unix-Throughput: We don't need to keep the structDesc in the argEntry if it's not
                     // actually passed in registers.
                     if (argEntry->isPassedInRegisters())
                     {
                         assert(argEntry->structDesc.passedInRegisters);
-                        if (lclVar != nullptr)
-                        {
-                            if (lvaGetPromotionType(lclVar->AsLclVarCommon()->GetLclNum()) ==
-                                PROMOTION_TYPE_INDEPENDENT)
-                            {
-                                copyBlkClass = objClass;
-                            }
-                        }
-                        else if (argObj->OperIs(GT_OBJ))
+                        if (argObj->OperIs(GT_OBJ))
                         {
                             if (passingSize != structSize)
                             {
                                 copyBlkClass = objClass;
                             }
                         }
-                        else
+                        else if (lclVar == nullptr)
                         {
                             // This should only be the case of a value directly producing a known struct type.
                             assert(argObj->TypeGet() != TYP_STRUCT);
@@ -9720,7 +9713,9 @@ GenTree* Compiler::fgMorphInitBlock(GenTree* tree)
             }
 #endif // LOCAL_ASSERTION_PROP
 
-            if (destLclVar->lvPromoted)
+            // If we have already determined that a promoted TYP_STRUCT lclVar will not be enregistered,
+            // we are better off doing a block init.
+            if (destLclVar->lvPromoted && (!destLclVar->lvDoNotEnregister || !destLclNode->TypeIs(TYP_STRUCT)))
             {
                 GenTree* newTree = fgMorphPromoteLocalInitBlock(destLclNode->AsLclVar(), initVal, blockSize);
 
@@ -10604,15 +10599,30 @@ GenTree* Compiler::fgMorphCopyBlock(GenTree* tree)
             // Are both dest and src promoted structs?
             if (destDoFldAsg && srcDoFldAsg)
             {
-                // Both structs should be of the same type, or each have a single field of the same type.
+                // Both structs should be of the same type, or have the same number of fields of the same type.
                 // If not we will use a copy block.
-                if (lvaTable[destLclNum].lvVerTypeInfo.GetClassHandle() !=
-                    lvaTable[srcLclNum].lvVerTypeInfo.GetClassHandle())
+                bool misMatchedTypes = false;
+                if (destLclVar->lvVerTypeInfo.GetClassHandle() != srcLclVar->lvVerTypeInfo.GetClassHandle())
                 {
-                    unsigned destFieldNum = lvaTable[destLclNum].lvFieldLclStart;
-                    unsigned srcFieldNum  = lvaTable[srcLclNum].lvFieldLclStart;
-                    if ((lvaTable[destLclNum].lvFieldCnt != 1) || (lvaTable[srcLclNum].lvFieldCnt != 1) ||
-                        (lvaTable[destFieldNum].lvType != lvaTable[srcFieldNum].lvType))
+                    if (destLclVar->lvFieldCnt != srcLclVar->lvFieldCnt)
+                    {
+                        misMatchedTypes = true;
+                    }
+                    else
+                    {
+                        for (int i = 0; i < destLclVar->lvFieldCnt; i++)
+                        {
+                            LclVarDsc* destFieldVarDsc = lvaGetDesc(destLclVar->lvFieldLclStart + i);
+                            LclVarDsc* srcFieldVarDsc  = lvaGetDesc(srcLclVar->lvFieldLclStart + i);
+                            if ((destFieldVarDsc->lvType != srcFieldVarDsc->lvType) ||
+                                (destFieldVarDsc->lvFldOffset != srcFieldVarDsc->lvFldOffset))
+                            {
+                                misMatchedTypes = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (misMatchedTypes)
                     {
                         requiresCopyBlock = true; // Mismatched types, leave as a CopyBlock
                         JITDUMP(" with mismatched types");
@@ -13093,6 +13103,30 @@ DONE_MORPHING_CHILDREN:
 
                 op1 = op2;
                 op2 = tree->AsOp()->gtOp2;
+            }
+
+            // See if we can fold floating point operations (can regress minopts mode)
+            if (opts.OptimizationEnabled() && varTypeIsFloating(tree->TypeGet()) && !optValnumCSE_phase)
+            {
+                if ((oper == GT_MUL) && !op1->IsCnsFltOrDbl() && op2->IsCnsFltOrDbl())
+                {
+                    if (op2->AsDblCon()->gtDconVal == 2.0)
+                    {
+                        // Fold "x*2.0" to "x+x"
+                        op2  = op1->OperIsLeaf() ? gtCloneExpr(op1) : fgMakeMultiUse(&tree->AsOp()->gtOp1);
+                        op1  = tree->AsOp()->gtOp1;
+                        oper = GT_ADD;
+                        tree = gtNewOperNode(oper, tree->TypeGet(), op1, op2);
+                        INDEBUG(tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED);
+                    }
+                    else if (op2->AsDblCon()->gtDconVal == 1.0)
+                    {
+                        // Fold "x*1.0" to "x"
+                        DEBUG_DESTROY_NODE(op2);
+                        DEBUG_DESTROY_NODE(tree);
+                        return op1;
+                    }
+                }
             }
 
             /* See if we can fold GT_ADD nodes. */
@@ -17407,7 +17441,8 @@ void Compiler::fgMorphLocalField(GenTree* tree, GenTree* parent)
 
             var_types treeType  = tree->TypeGet();
             var_types fieldType = fldVarDsc->TypeGet();
-            if (fldOffset != BAD_VAR_NUM && (genTypeSize(fieldType) == genTypeSize(treeType)))
+            if (fldOffset != BAD_VAR_NUM &&
+                ((genTypeSize(fieldType) == genTypeSize(treeType)) || (varDsc->lvFieldCnt == 1)))
             {
                 // There is an existing sub-field we can use.
                 tree->AsLclFld()->SetLclNum(fieldLclIndex);

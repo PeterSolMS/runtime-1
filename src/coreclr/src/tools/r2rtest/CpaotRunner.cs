@@ -73,8 +73,8 @@ namespace R2RTest
             // Output
             yield return $"-o:{outputFileName}";
 
-            // Todo: Allow control of some of these
-            yield return "--targetarch=x64";
+            // Todo: Allow cross-architecture compilation
+            //yield return "--targetarch=x64";
 
             if (_options.Map)
             {
@@ -137,7 +137,7 @@ namespace R2RTest
                 // This is useful for crossgen2-specific scenarios since crossgen2 expects a list of files unlike crossgen1
                 foreach (var reference in _referenceFiles)
                 {
-                    yield return (_options.Composite ? "-u:" : "-r:") + reference;
+                    yield return (_options.Composite && !_options.PartialComposite ? "-u:" : "-r:") + reference;
                 }
             }
         }

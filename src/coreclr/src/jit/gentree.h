@@ -1646,6 +1646,7 @@ public:
     inline bool IsFPZero();
     inline bool IsIntegralConst(ssize_t constVal);
     inline bool IsIntegralConstVector(ssize_t constVal);
+    inline bool IsSIMDZero();
 
     inline bool IsBoxedValue();
 
@@ -3600,8 +3601,8 @@ public:
     void InitializeStructReturnType(Compiler* comp, CORINFO_CLASS_HANDLE retClsHnd);
 
     // Initialize the Return Type Descriptor for a method that returns a TYP_LONG
-    // Only needed for X86
-    void InitializeLongReturnType(Compiler* comp);
+    // Only needed for X86 and arm32.
+    void InitializeLongReturnType();
 
     // Reset type descriptor to defaults
     void Reset()
@@ -3680,6 +3681,7 @@ public:
         }
         else
         {
+            assert(m_inited);
             return ((m_regType[0] != TYP_UNKNOWN) && (m_regType[1] != TYP_UNKNOWN));
         }
     }
@@ -3695,7 +3697,7 @@ public:
     //    var_type of the return register specified by its index.
     //    asserts if the index does not have a valid register return type.
 
-    var_types GetReturnRegType(unsigned index)
+    var_types GetReturnRegType(unsigned index) const
     {
         var_types result = m_regType[index];
         assert(result != TYP_UNKNOWN);
@@ -3711,10 +3713,10 @@ public:
     }
 
     // Get ith ABI return register
-    regNumber GetABIReturnReg(unsigned idx);
+    regNumber GetABIReturnReg(unsigned idx) const;
 
     // Get reg mask of ABI return registers
-    regMaskTP GetABIReturnRegs();
+    regMaskTP GetABIReturnRegs() const;
 };
 
 class TailCallSiteInfo
@@ -3918,7 +3920,6 @@ struct GenTreeCall final : public GenTree
 #if FEATURE_MULTIREG_RET
 
     // State required to support multi-reg returning call nodes.
-    // For now it is enabled only for x64 unix.
     //
     // TODO-AllArch: enable for all call nodes to unify single-reg and multi-reg returns.
     ReturnTypeDesc gtReturnTypeDesc;
@@ -3940,17 +3941,34 @@ struct GenTreeCall final : public GenTree
     // Returns
     //    Type descriptor of the value returned by call
     //
-    // Note:
-    //    Right now implemented only for x64 unix and yet to be
-    //    implemented for other multi-reg target arch (Arm64/Arm32/x86).
-    //
     // TODO-AllArch: enable for all call nodes to unify single-reg and multi-reg returns.
-    ReturnTypeDesc* GetReturnTypeDesc()
+    const ReturnTypeDesc* GetReturnTypeDesc() const
     {
 #if FEATURE_MULTIREG_RET
         return &gtReturnTypeDesc;
 #else
         return nullptr;
+#endif
+    }
+
+    void InitializeLongReturnType()
+    {
+#if FEATURE_MULTIREG_RET
+        gtReturnTypeDesc.InitializeLongReturnType();
+#endif
+    }
+
+    void InitializeStructReturnType(Compiler* comp, CORINFO_CLASS_HANDLE retClsHnd)
+    {
+#if FEATURE_MULTIREG_RET
+        gtReturnTypeDesc.InitializeStructReturnType(comp, retClsHnd);
+#endif
+    }
+
+    void ResetReturnType()
+    {
+#if FEATURE_MULTIREG_RET
+        gtReturnTypeDesc.Reset();
 #endif
     }
 
@@ -4220,18 +4238,29 @@ struct GenTreeCall final : public GenTree
     //
     bool HasMultiRegRetVal() const
     {
-#if defined(TARGET_X86)
-        return varTypeIsLong(gtType);
-#elif FEATURE_MULTIREG_RET && defined(TARGET_ARM)
-        return varTypeIsLong(gtType) || (varTypeIsStruct(gtType) && !HasRetBufArg());
+#ifdef FEATURE_MULTIREG_RET
+#if defined(TARGET_X86) || defined(TARGET_ARM)
+        if (varTypeIsLong(gtType))
+        {
+            return true;
+        }
 #elif defined(FEATURE_HFA) && defined(TARGET_ARM64)
         // SIMD types are returned in vector regs on ARM64.
-        return (gtType == TYP_STRUCT) && !HasRetBufArg();
-#elif FEATURE_MULTIREG_RET
-        return varTypeIsStruct(gtType) && !HasRetBufArg();
-#else
+        if (varTypeIsSIMD(gtType))
+        {
+            return false;
+        }
+#endif // FEATURE_HFA && TARGET_ARM64
+
+        if (!varTypeIsStruct(gtType) || HasRetBufArg())
+        {
+            return false;
+        }
+        // Now it is a struct that is returned in registers.
+        return GetReturnTypeDesc()->IsMultiRegRetType();
+#else  // !FEATURE_MULTIREG_RET
         return false;
-#endif
+#endif // !FEATURE_MULTIREG_RET
     }
 
     // Returns true if VM has flagged this method as CORINFO_FLG_PINVOKE.
@@ -6764,6 +6793,25 @@ inline bool GenTree::IsIntegralConstVector(ssize_t constVal)
         assert(varTypeIsIntegral(AsSIMD()->gtSIMDBaseType));
         assert(gtGetOp2IfPresent() == nullptr);
         return true;
+    }
+#endif
+
+    return false;
+}
+
+//-------------------------------------------------------------------
+// IsSIMDZero: returns true if this this is a SIMD vector
+// with all its elements equal to zero.
+//
+// Returns:
+//     True if this represents an integral const SIMD vector.
+//
+inline bool GenTree::IsSIMDZero()
+{
+#ifdef FEATURE_SIMD
+    if ((gtOper == GT_SIMD) && (AsSIMD()->gtSIMDIntrinsicID == SIMDIntrinsicInit))
+    {
+        return (gtGetOp1()->IsIntegralConst(0) || gtGetOp1()->IsFPZero());
     }
 #endif
 
