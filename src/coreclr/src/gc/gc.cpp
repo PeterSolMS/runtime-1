@@ -8169,7 +8169,114 @@ private:
 #endif //USE_INTROSORT
 
 #ifdef MULTIPLE_HEAPS
-#ifdef PARALLEL_MARK_LIST_SORT
+#ifdef HOST_64BIT
+#define BIT_MAP_SORT
+#endif
+#ifdef BIT_MAP_SORT
+void gc_heap::sort_mark_list()
+{
+    // if this heap had a mark list overflow, we don't do anything
+    if (mark_list_index > mark_list_end)
+    {
+        //        printf("sort_mark_list: overflow on heap %d\n", heap_number);
+        return;
+    }
+
+    // if any other heap had a mark list overflow, we fake one too,
+    // so we don't use an incomplete mark list by mistake
+    for (int i = 0; i < n_heaps; i++)
+    {
+        if (g_heaps[i]->mark_list_index > g_heaps[i]->mark_list_end)
+        {
+            mark_list_index = mark_list_end + 1;
+            //            printf("sort_mark_list: overflow on heap %d\n", i);
+            return;
+        }
+    }
+
+    // the bit map sorting only works if we have enough space
+    // - if not, fake a mark list overflow
+    size_t ephemeral_size = heap_segment_allocated(ephemeral_heap_segment) - gc_low;
+    size_t bitmap_size_qwords = (ephemeral_size + 511) / 512;
+    if (settings.condemned_generation > 1 || bitmap_size_qwords > mark_list_size)
+    {
+        mark_list_index = mark_list_end + 1;
+        //            printf("sort_mark_list: overflow on heap %d\n", i);
+        return;
+    }
+
+    uint64_t* bitmap = (uint64_t*)&g_mark_list_copy[heap_number * mark_list_size];
+    size_t bitmap_size_bytes = bitmap_size_qwords * 8;
+#ifdef _DEBUG
+    // invariant is the bitmap is all zeroes
+    for (size_t i = 0; i < bitmap_size_qwords; i++)
+    {
+        assert(bitmap[i] == 0);
+    }
+#endif //_DEBUG
+    uint8_t* low = gc_low;
+    size_t high_offs = ephemeral_high - gc_low;
+    for (int i = 0; i < n_heaps; i++)
+    {
+        uint8_t** mark_list = g_heaps[i]->mark_list;
+        uint8_t** mark_list_index = g_heaps[i]->mark_list_index;
+        for (; mark_list < mark_list_index; mark_list++)
+        {
+            uint8_t* mark_item = *mark_list;
+            assert(header(mark_item)->IsMarked());
+            size_t mark_item_offs = mark_item - low;
+            if (mark_item_offs >= high_offs)
+                continue;
+            size_t mark_item_offs_qwords = mark_item_offs >> 3;
+            size_t mark_item_inx = mark_item_offs_qwords >> 6;
+            assert(mark_item_inx < bitmap_size_qwords);
+            size_t mark_item_bit = 1i64 << (mark_item_offs_qwords & 63);
+            bitmap[mark_item_inx] |= mark_item_bit;
+        }
+    }
+}
+
+void gc_heap::merge_mark_lists()
+{
+    // in case of mark list overflow, don't bother
+    if (mark_list_index > mark_list_end)
+    {
+        return;
+    }
+
+    // build sorted mark_list from the bitmap
+    uint64_t* bitmap = (uint64_t*)&g_mark_list_copy[heap_number * mark_list_size];
+    size_t ephemeral_size = heap_segment_allocated(ephemeral_heap_segment) - gc_low;
+    size_t bitmap_size_qwords = (ephemeral_size + 511) / 512;
+    mark_list_index = mark_list;
+    for (size_t bitmap_index = 0; bitmap_index < bitmap_size_qwords; bitmap_index++)
+    {
+        uint64_t bitmap_element = bitmap[bitmap_index];
+        if (bitmap_element == 0)
+            continue;
+        DWORD bitmap_bit;
+        do
+        {
+            BitScanForward64(&bitmap_bit, bitmap_element);
+            uint8_t* mark_list_item = gc_low + (bitmap_index * 64 + bitmap_bit) * 8;
+            assert(header(mark_list_item)->IsMarked());
+            if (mark_list_index < mark_list_end)
+                *mark_list_index++ = mark_list_item;
+            else
+            {
+                mark_list_index++;
+                goto done;
+            }
+            // turn off the bit we just handled
+            bitmap_element &= ~(1i64 << bitmap_bit);
+        }
+        while (bitmap_element != 0);
+        bitmap[bitmap_index] = bitmap_element;
+    }
+done:
+    ;
+}
+#elif #defined(PARALLEL_MARK_LIST_SORT)
 void gc_heap::sort_mark_list()
 {
     // if this heap had a mark list overflow, we don't do anything
@@ -8529,7 +8636,7 @@ void gc_heap::combine_mark_lists()
 
 void gc_heap::grow_mark_list()
 {
-    size_t new_mark_list_size = min (mark_list_size * 2, 300 * 1024);
+    size_t new_mark_list_size = min (mark_list_size * 2, 1000 * 1024);
     if (new_mark_list_size == mark_list_size)
         return;
 
@@ -8538,6 +8645,9 @@ void gc_heap::grow_mark_list()
 
 #ifdef PARALLEL_MARK_LIST_SORT
     uint8_t** new_mark_list_copy = make_mark_list (new_mark_list_size * n_heaps);
+#ifdef BIT_MAP_SORT
+    memset(new_mark_list_copy, 0, new_mark_list_size * n_heaps * sizeof(new_mark_list_copy[0]));
+#endif //BIT_MAP_SORT
 #endif //PARALLEL_MARK_LIST_SORT
 
     if (new_mark_list != nullptr
@@ -10071,6 +10181,9 @@ gc_heap::init_semi_shared()
     {
         goto cleanup;
     }
+#ifdef BIT_MAP_SORT
+    memset(g_mark_list_copy, 0, mark_list_size * n_heaps * sizeof(g_mark_list_copy[0]));
+#endif //BIT_MAP_SORT
 #endif //PARALLEL_MARK_LIST_SORT
 
 #else //MULTIPLE_HEAPS
