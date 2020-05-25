@@ -8173,6 +8173,7 @@ private:
 #define BIT_MAP_SORT
 #endif
 #ifdef BIT_MAP_SORT
+NOINLINE
 void gc_heap::sort_mark_list()
 {
     // if this heap had a mark list overflow, we don't do anything
