@@ -22691,6 +22691,19 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     last_object_in_plug = xl;
 
                     xl = xl + Align (size (xl));
+                    if (use_mark_list)
+                    {
+                        uint8_t* next_marked_object = nullptr;
+                        while (mark_list_next < mark_list_index)
+                        {
+                            next_marked_object = *mark_list_next;
+                            if (next_marked_object >= xl)
+                                break;
+                            mark_list_next++;
+                        }
+                        if (next_marked_object != xl)
+                            break;
+                    }
                     Prefetch (xl);
                 }
 
