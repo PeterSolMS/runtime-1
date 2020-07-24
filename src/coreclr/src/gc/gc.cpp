@@ -3687,7 +3687,7 @@ public:
         RawSetMethodTable((MethodTable *) (((size_t) RawGetMethodTable()) | GC_MARKED));
     }
 
-    BOOL IsMarked() const
+    inline BOOL IsMarked() const
     {
         return !!(((size_t)RawGetMethodTable()) & GC_MARKED);
     }
@@ -3698,7 +3698,7 @@ public:
         GetHeader()->SetGCBit();
     }
 
-    BOOL IsPinned() const
+    inline BOOL IsPinned() const
     {
         return !!((((CObjectHeader*)this)->GetHeader()->GetBits()) & BIT_SBLK_GC_RESERVE);
     }
@@ -22663,10 +22663,12 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
             {
                 uint8_t* xl = x;
-                while ((xl < end) && marked (xl) && (pinned (xl) == pinned_plug_p))
+                assert ((xl < end) && marked (xl));
+                BOOL next_object_marked_p = TRUE;
+                while (next_object_marked_p && (pinned (xl) == pinned_plug_p))
                 {
                     assert (xl < end);
-                    if (pinned(xl))
+                    if (pinned_plug_p)
                     {
                         clear_pinned (xl);
                     }
@@ -22702,12 +22704,21 @@ void gc_heap::plan_phase (int condemned_gen_number)
                             mark_list_next++;
                         }
                         if (next_marked_object != xl)
+                        {
+                            next_object_marked_p = FALSE;
                             break;
+                        }
+                        // we are using the mark list only for ephemeral collections,
+                        // and the ephemeral generations are in one segment per heap
+                        assert (xl < end);
+                        next_object_marked_p = TRUE;
                     }
-                    Prefetch (xl);
+                    else
+                    {
+                        Prefetch(xl);
+                        next_object_marked_p = ((xl < end) && marked (xl));
+                    }
                 }
-
-                BOOL next_object_marked_p = ((xl < end) && marked (xl));
 
                 if (pinned_plug_p)
                 {
