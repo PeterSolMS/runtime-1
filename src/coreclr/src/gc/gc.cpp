@@ -22711,6 +22711,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                         // we are using the mark list only for ephemeral collections,
                         // and the ephemeral generations are in one segment per heap
                         assert (xl < end);
+                        Prefetch(xl);
                         next_object_marked_p = TRUE;
                     }
                     else
