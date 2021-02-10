@@ -3819,13 +3819,11 @@ void gc_heap::seg_mapping_table_add_segment (heap_segment* seg, gc_heap* hp)
         end_index, (seg_mapping_table[end_index].boundary + 1)));
 
 #ifdef MULTIPLE_HEAPS
-#ifdef SIMPLE_DPRINTF
     dprintf (2, ("begin %d: h0: %Ix(%d), h1: %Ix(%d); end %d: h0: %Ix(%d), h1: %Ix(%d)",
         begin_index, (uint8_t*)(begin_entry->h0), (begin_entry->h0 ? begin_entry->h0->heap_number : -1),
         (uint8_t*)(begin_entry->h1), (begin_entry->h1 ? begin_entry->h1->heap_number : -1),
         end_index, (uint8_t*)(end_entry->h0), (end_entry->h0 ? end_entry->h0->heap_number : -1),
         (uint8_t*)(end_entry->h1), (end_entry->h1 ? end_entry->h1->heap_number : -1)));
-#endif //SIMPLE_DPRINTF
     assert (end_entry->boundary == 0);
     assert (end_entry->h0 == 0);
     end_entry->h0 = hp;
@@ -8475,6 +8473,8 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
         if (gc_can_use_concurrent)
         {
+            uint32_t* saved_mark_array = hp->mark_array;
+
             // The current design of software write watch requires that the runtime is suspended during resize. Suspending
             // on resize is preferred because it is a far less frequent operation than GetWriteWatch() / ResetWriteWatch().
             // Suspending here allows copying dirty state from the old table into the new table, and not have to merge old
@@ -8491,6 +8491,18 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
                 // may run while this thread is blocked. This includes updates to g_gc_card_table, g_gc_lowest_address, and
                 // g_gc_highest_address.
                 suspend_EE();
+            }
+
+            // this thread may have gotten suspended as an ironic consequence of calling suspend_EE -
+            // in this case make sure the current mark array is committed for the new segment as well
+            if (hp->mark_array != saved_mark_array)
+            {
+                if (!commit_mark_array_new_seg (hp, new_seg))
+                {
+                    dprintf(GC_TABLE_LOG, ("failed to commit mark array for the new seg in range"));
+                    set_fgm_result(fgm_commit_table, logging_ma_commit_size, uoh_p);
+                    return -1;
+                }
             }
 
             g_gc_card_table = translated_ct;
@@ -10176,7 +10188,7 @@ retry:
                 {
                     new_free_space_size = free_space_size - plug_size;
                     pinned_len (m) = new_free_space_size;
-#ifdef SIMPLE_DPRINTF
+
                     dprintf (SEG_REUSE_LOG_0, ("[%d]FP: 0x%Ix->0x%Ix(%Ix)(%Ix), [0x%Ix (2^%d) -> [0x%Ix (2^%d)",
                                 heap_num,
                                 old_loc,
@@ -10187,7 +10199,6 @@ retry:
                                 index_of_highest_set_bit (free_space_size),
                                 (pinned_plug (m) - pinned_len (m)),
                                 index_of_highest_set_bit (new_free_space_size)));
-#endif //SIMPLE_DPRINTF
 
                     if (pad != 0)
                     {
@@ -10215,7 +10226,7 @@ retry:
                     new_address = heap_segment_plan_allocated (seg);
                     new_free_space_size = free_space_size - plug_size;
                     heap_segment_plan_allocated (seg) = new_address + plug_size;
-#ifdef SIMPLE_DPRINTF
+
                     dprintf (SEG_REUSE_LOG_0, ("[%d]FS: 0x%Ix-> 0x%Ix(%Ix) (2^%d) -> 0x%Ix (2^%d)",
                                 heap_num,
                                 old_loc,
@@ -10224,7 +10235,6 @@ retry:
                                 index_of_highest_set_bit (free_space_size),
                                 heap_segment_plan_allocated (seg),
                                 index_of_highest_set_bit (new_free_space_size)));
-#endif //SIMPLE_DPRINTF
 
                     if (pad != 0)
                         set_node_realigned (old_loc);
@@ -11931,7 +11941,6 @@ gc_heap::init_semi_shared()
     dprintf (BGC_TUNING_LOG, ("BTL tuning %s!!!",
         (bgc_tuning::enable_fl_tuning ? "enabled" : "disabled")));
 
-#ifdef SIMPLE_DPRINTF
     dprintf (BGC_TUNING_LOG, ("BTL tuning parameters: mem goal: %d%%(%I64d), +/-%d%%, gen2 correction factor: %.2f, sweep flr goal: %d%%, smooth factor: %.3f(%s), TBH: %s, FF: %.3f(%s), ml: kp %.5f, ki %.10f",
         bgc_tuning::memory_load_goal,
         bgc_tuning::available_memory_goal,
@@ -11954,7 +11963,6 @@ gc_heap::init_semi_shared()
         (bgc_tuning::enable_kd ? "enabled" : "disabled"),
         (bgc_tuning::enable_gradual_d ? "enabled" : "disabled"),
         bgc_tuning::above_goal_ff));
-#endif //SIMPLE_DPRINTF
 
     if (bgc_tuning::enable_fl_tuning && (current_memory_load < bgc_tuning::memory_load_goal))
     {
@@ -29884,7 +29892,6 @@ BOOL gc_heap::commit_mark_array_by_range (uint8_t* begin, uint8_t* end, uint32_t
     uint8_t* commit_end = align_on_page ((uint8_t*)&mark_array_addr[end_word]);
     size_t size = (size_t)(commit_end - commit_start);
 
-#ifdef SIMPLE_DPRINTF
     dprintf (GC_TABLE_LOG, ("range: %Ix->%Ix mark word: %Ix->%Ix(%Id), mark array: %Ix->%Ix(%Id), commit %Ix->%Ix(%Id)",
                             begin, end,
                             beg_word, end_word,
@@ -29894,7 +29901,6 @@ BOOL gc_heap::commit_mark_array_by_range (uint8_t* begin, uint8_t* end, uint32_t
                             (size_t)(&mark_array_addr[end_word] - &mark_array_addr[beg_word]),
                             commit_start, commit_end,
                             size));
-#endif //SIMPLE_DPRINTF
 
     if (virtual_commit (commit_start, size, gc_oh_num::none))
     {
@@ -30107,7 +30113,6 @@ void gc_heap::decommit_mark_array_by_seg (heap_segment* seg)
         uint8_t* decommit_end = align_lower_page ((uint8_t*)&mark_array[end_word]);
         size_t size = (size_t)(decommit_end - decommit_start);
 
-#ifdef SIMPLE_DPRINTF
         dprintf (GC_TABLE_LOG, ("seg: %Ix mark word: %Ix->%Ix(%Id), mark array: %Ix->%Ix(%Id), decommit %Ix->%Ix(%Id)",
                                 seg,
                                 beg_word, end_word,
@@ -30117,7 +30122,6 @@ void gc_heap::decommit_mark_array_by_seg (heap_segment* seg)
                                 (size_t)(&mark_array[end_word] - &mark_array[beg_word]),
                                 decommit_start, decommit_end,
                                 size));
-#endif //SIMPLE_DPRINTF
 
         if (decommit_start < decommit_end)
         {
@@ -31914,7 +31918,6 @@ void gc_heap::bgc_tuning::update_bgc_sweep_start (int gen_number, size_t num_gen
     // We are resetting gen2 alloc at sweep start.
     current_gen_stats->last_alloc = 0;
 
-#ifdef SIMPLE_DPRINTF
     dprintf (BGC_TUNING_LOG, ("BTL%d: sflr: %.3f%%->%.3f%% (%Id->%Id, %Id->%Id) (%Id:%Id-%Id/gen1) since start (afl: %Id, %.3f)",
              gen_number,
              current_gen_calc->last_bgc_flr, current_gen_calc->current_bgc_sweep_flr,
@@ -31923,7 +31926,6 @@ void gc_heap::bgc_tuning::update_bgc_sweep_start (int gen_number, size_t num_gen
              num_gen1s_since_start, current_gen_stats->last_alloc_start_to_sweep,
              (num_gen1s_since_start? (current_gen_stats->last_alloc_start_to_sweep / num_gen1s_since_start) : 0),
              artificial_additional_fl, physical_gen_flr));
-#endif //SIMPLE_DPRINTF
 }
 
 void gc_heap::bgc_tuning::record_bgc_sweep_start()
@@ -31989,7 +31991,6 @@ void gc_heap::bgc_tuning::calculate_tuning (int gen_number, bool use_this_loop_p
     double current_end_to_sweep_flr = current_gen_calc->last_bgc_flr - current_gen_calc->current_bgc_sweep_flr;
     bool current_sweep_above_p = (current_gen_calc->current_bgc_sweep_flr > gen_sweep_flr_goal);
 
-#ifdef SIMPLE_DPRINTF
     dprintf (BGC_TUNING_LOG, ("BTL%d: sflr: c %.3f (%s), p %s, palloc: %Id, aalloc %Id(%s)",
         gen_number,
         current_gen_calc->current_bgc_sweep_flr,
@@ -32011,7 +32012,6 @@ void gc_heap::bgc_tuning::calculate_tuning (int gen_number, bool use_this_loop_p
             (gen1_index_last_bgc_start - gen1_index_last_bgc_end), current_gen_stats->last_alloc_end_to_start,
             (gen1_index_last_bgc_sweep - gen1_index_last_bgc_start), current_gen_stats->last_alloc_start_to_sweep,
             num_gen1s_since_sweep, current_gen_stats->last_alloc_sweep_to_end));
-#endif //SIMPLE_DPRINTF
 
     size_t saved_alloc_to_trigger = 0;
 
@@ -34415,21 +34415,16 @@ BOOL gc_heap::process_free_space (heap_segment* seg,
     *total_free_space += free_space;
     *largest_free_space = max (*largest_free_space, free_space);
 
-#ifdef SIMPLE_DPRINTF
     dprintf (SEG_REUSE_LOG_1, ("free space len: %Ix, total free space: %Ix, largest free space: %Ix",
                 free_space, *total_free_space, *largest_free_space));
-#endif //SIMPLE_DPRINTF
 
     if ((*total_free_space >= min_free_size) && (*largest_free_space >= min_cont_size))
     {
-#ifdef SIMPLE_DPRINTF
         dprintf (SEG_REUSE_LOG_0, ("(gen%d)total free: %Ix(min: %Ix), largest free: %Ix(min: %Ix). Found segment %Ix to reuse without bestfit",
             settings.condemned_generation,
             *total_free_space, min_free_size, *largest_free_space, min_cont_size,
             (size_t)seg));
-#else
-        UNREFERENCED_PARAMETER(seg);
-#endif //SIMPLE_DPRINTF
+
         return TRUE;
     }
 
