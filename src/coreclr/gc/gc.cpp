@@ -8473,8 +8473,6 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
         if (gc_can_use_concurrent)
         {
-            uint32_t* saved_mark_array = hp->mark_array;
-
             // The current design of software write watch requires that the runtime is suspended during resize. Suspending
             // on resize is preferred because it is a far less frequent operation than GetWriteWatch() / ResetWriteWatch().
             // Suspending here allows copying dirty state from the old table into the new table, and not have to merge old
@@ -8491,18 +8489,6 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
                 // may run while this thread is blocked. This includes updates to g_gc_card_table, g_gc_lowest_address, and
                 // g_gc_highest_address.
                 suspend_EE();
-            }
-
-            // this thread may have gotten suspended as an ironic consequence of calling suspend_EE -
-            // in this case make sure the current mark array is committed for the new segment as well
-            if (hp->mark_array != saved_mark_array)
-            {
-                if (!commit_mark_array_new_seg (hp, new_seg))
-                {
-                    dprintf(GC_TABLE_LOG, ("failed to commit mark array for the new seg in range"));
-                    set_fgm_result(fgm_commit_table, logging_ma_commit_size, uoh_p);
-                    return -1;
-                }
             }
 
             g_gc_card_table = translated_ct;
@@ -19004,6 +18990,16 @@ void gc_heap::gc1()
             }
             if (heap_number == 0)
             {
+#ifdef VERIFY_HEAP
+                // need take the gc_lock in preparation for verify_heap below
+                // *before* we suspend the EE, otherwise we get a deadlock
+                if (GCConfig::GetHeapVerifyLevel() & GCConfig::HEAPVERIFY_GC)
+                {
+                    enter_spin_lock (&gc_heap::gc_lock);
+                    dprintf (SPINLOCK_LOG, ("enter gc_lock for verify_heap"));
+                }
+#endif // VERIFY_HEAP
+
                 suspend_EE();
                 bgc_threads_sync_event.Set();
             }
@@ -19013,6 +19009,16 @@ void gc_heap::gc1()
                 dprintf (2, ("bgc_threads_sync_event is signalled"));
             }
 #else //MULTIPLE_HEAPS
+#ifdef VERIFY_HEAP
+            // need take the gc_lock in preparation for verify_heap below
+            // *before* we suspend the EE, otherwise we get a deadlock
+            if (GCConfig::GetHeapVerifyLevel() & GCConfig::HEAPVERIFY_GC)
+            {
+                enter_spin_lock (&gc_heap::gc_lock);
+                dprintf (SPINLOCK_LOG, ("enter gc_lock for verify_heap"));
+            }
+#endif // VERIFY_HEAP
+
             suspend_EE();
 #endif //MULTIPLE_HEAPS
 
@@ -19060,6 +19066,14 @@ void gc_heap::gc1()
             }
             if (heap_number == 0)
             {
+#ifdef VERIFY_HEAP
+                if (GCConfig::GetHeapVerifyLevel() & GCConfig::HEAPVERIFY_GC)
+                {
+                    dprintf (SPINLOCK_LOG, ("leave gc_lock taken for verify_heap"));
+                    leave_spin_lock (&gc_heap::gc_lock);
+                }
+#endif // VERIFY_HEAP
+
                 restart_EE();
                 bgc_threads_sync_event.Set();
             }
@@ -19069,6 +19083,14 @@ void gc_heap::gc1()
                 dprintf (2, ("bgc_threads_sync_event is signalled"));
             }
 #else //MULTIPLE_HEAPS
+#ifdef VERIFY_HEAP
+            if (GCConfig::GetHeapVerifyLevel() & GCConfig::HEAPVERIFY_GC)
+            {
+                dprintf(SPINLOCK_LOG, ("leave gc_lock taken for verify_heap"));
+                leave_spin_lock (&gc_heap::gc_lock);
+            }
+#endif // VERIFY_HEAP
+
             restart_EE();
 #endif //MULTIPLE_HEAPS
 
