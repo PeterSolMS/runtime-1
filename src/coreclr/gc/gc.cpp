@@ -12500,9 +12500,9 @@ gc_heap::init_gc_heap (int  h_number)
 
 #endif //MULTIPLE_HEAPS
 
-    generation_of (max_generation)->free_list_allocator = allocator(NUM_GEN2_ALIST, BASE_GEN2_ALIST_BITS, gen2_alloc_list, max_generation);
-    generation_of (loh_generation)->free_list_allocator = allocator(NUM_LOH_ALIST, BASE_LOH_ALIST_BITS, loh_alloc_list);
-    generation_of (poh_generation)->free_list_allocator = allocator(NUM_POH_ALIST, BASE_POH_ALIST_BITS, poh_alloc_list);
+    generation_of (max_generation)->free_list_allocator = allocator (NUM_GEN2_ALIST, GEN2_MIN_SIZE, BASE_GEN2_ALIST_BITS, NUM_GEN2_MANTISSA_BITS, gen2_alloc_list, max_generation);
+    generation_of (loh_generation)->free_list_allocator = allocator (NUM_LOH_ALIST, LOH_MIN_SIZE, BASE_LOH_ALIST_BITS, NUM_LOH_MANTISSA_BITS, loh_alloc_list);
+    generation_of (poh_generation)->free_list_allocator = allocator (NUM_POH_ALIST, POH_MIN_SIZE, BASE_POH_ALIST_BITS, NUM_POH_MANTISSA_BITS, poh_alloc_list);
 
     etw_allocation_running_amount[0] = 0;
     etw_allocation_running_amount[1] = 0;
@@ -13174,11 +13174,14 @@ void gc_heap::check_batch_mark_array_bits (uint8_t* start, uint8_t* end)
 }
 #endif //VERIFY_HEAP && BACKGROUND_GC
 
-allocator::allocator (unsigned int num_b, int fbb, alloc_list* b, int gen)
+allocator::allocator (unsigned int num_b, size_t min, int ib, int mb, alloc_list* b, int gen)
 {
     assert (num_b < MAX_BUCKET_COUNT);
     num_buckets = num_b;
-    first_bucket_bits = fbb;
+    min_size = min;
+    ignore_bits = ib;
+    mantissa_bits = mb;
+    mantissa_mask = (1 << mb) - 1;
     buckets = b;
     gen_number = gen;
 }
@@ -16654,7 +16657,7 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
     if (! (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, generation_allocation_pointer (gen),
                        generation_allocation_limit (gen), old_loc, USE_PADDING_TAIL | pad_in_front)))
     {
-        for (unsigned int a_l_idx = gen_allocator->first_suitable_bucket(real_size * 2); 
+        for (unsigned int a_l_idx = gen_allocator->first_suitable_bucket_for_allocation(real_size);
              a_l_idx < gen_allocator->number_of_buckets(); a_l_idx++)
         {
             uint8_t* free_list = 0;

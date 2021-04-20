@@ -613,8 +613,8 @@ typedef DPTR(class CFinalize)                  PTR_CFinalize;
 //generation free list. It is an array of free lists bucketed by size, starting at sizes lower than (1 << first_bucket_bits)
 //and doubling each time. The last bucket (index == num_buckets) is for largest sizes with no limit
 
-#define MAX_SOH_BUCKET_COUNT (13)//Max number of buckets for the SOH generations.
-#define MAX_BUCKET_COUNT (20)//Max number of buckets.
+#define MAX_SOH_BUCKET_COUNT (201)//Max number of buckets for the SOH generations.
+#define MAX_BUCKET_COUNT (201)//Max number of buckets.
 class alloc_list
 {
 #ifdef DOUBLY_LINKED_FL
@@ -654,7 +654,10 @@ public:
 
 class allocator
 {
-    int first_bucket_bits;
+    size_t min_size;
+    int ignore_bits;
+    unsigned mantissa_bits;
+    unsigned mantissa_mask;
     unsigned int num_buckets;
     alloc_list first_bucket;
     alloc_list* buckets;
@@ -664,12 +667,15 @@ class allocator
     void thread_free_item_end (uint8_t* free_item, uint8_t*& head, uint8_t*& tail, int bn);
 
 public:
-    allocator (unsigned int num_b, int fbb, alloc_list* b, int gen=-1);
+    allocator (unsigned int num_b, size_t min, int ib, int mb, alloc_list* b, int gen=-1);
 
     allocator()
     {
         num_buckets = 1;
-        first_bucket_bits = sizeof(size_t) * 8 - 1;
+        ignore_bits = sizeof(size_t) * 8 - 1;
+        mantissa_bits = 0;
+        mantissa_mask = 0;
+        min_size = ((size_t)1) << ignore_bits;
         // for young gens we just set it to 0 since we don't treat
         // them differently from each other
         gen_number = 0;
@@ -684,23 +690,52 @@ public:
     // there is always such bucket since the last one fits everything
     unsigned int first_suitable_bucket (size_t size)
     {
-        // sizes taking first_bucket_bits or less are mapped to bucket 0
-        // others are mapped to buckets 0, 1, 2 respectively
-        size = (size >> first_bucket_bits) | 1;
+        if (size < min_size)
+            return 0;
 
-        DWORD highest_set_bit_index;
-    #ifdef HOST_64BIT
-        BitScanReverse64(&highest_set_bit_index, size);
-    #else
-        BitScanReverse(&highest_set_bit_index, size);
-    #endif
+        size_t s = ((size - min_size) >> ignore_bits);
+        if (s <= mantissa_mask)
+        {
+            return (unsigned)s;
+        }
+        unsigned long index = 0;
+        _BitScanReverse64 (&index, s);
+        assert (index >= mantissa_bits && index <= 63);
+        unsigned e = index - mantissa_bits - 1;
+        unsigned f = (s >> (index - mantissa_bits)) & mantissa_mask;
+        unsigned result = (e << mantissa_bits) | f;
+        return result < num_buckets ? result : num_buckets-1;
+    }
 
-        return min ((unsigned int)highest_set_bit_index, (num_buckets - 1));
+    size_t size_from_bucket_number (unsigned int bn)
+    {
+        unsigned e = bn >> mantissa_bits;
+        unsigned f = bn & mantissa_mask;
+        size_t s;
+        if (e == 0)
+        {
+            s = f;
+        }
+        else
+        {
+            s = (f + (1 << mantissa_bits)) << (e - 1);
+        }
+        return (s << ignore_bits) + min_size;
+    }
+
+    unsigned first_suitable_bucket_for_allocation (size_t size)
+    {
+        if (num_buckets <= 1)
+            return 0;
+        unsigned bn = first_suitable_bucket (size);
+        if ((bn < num_buckets - 1) && (size_from_bucket_number (bn) < size))
+            bn++;
+        return bn;
     }
 
     size_t first_bucket_size()
     {
-        return ((size_t)1 << (first_bucket_bits + 1));
+        return min_size;
     }
 
     uint8_t*& alloc_list_head_of (unsigned int bn)
@@ -4292,28 +4327,34 @@ protected:
 
 #endif //SYNCHRONIZATION_STATS
 
-#define NUM_LOH_ALIST (7)
+#define NUM_LOH_ALIST (200)
     // bucket 0 contains sizes less than 64*1024
     // the "BITS" number here is the highest bit in 64*1024 - 1, zero-based as in BitScanReverse.
     // see first_suitable_bucket(size_t size) for details.
+#define LOH_MIN_SIZE (64*1024)
+#define NUM_LOH_MANTISSA_BITS (4)
 #define BASE_LOH_ALIST_BITS (15)
     PER_HEAP
     alloc_list loh_alloc_list[NUM_LOH_ALIST-1];
 
-#define NUM_GEN2_ALIST (12)
+#define GEN2_MIN_SIZE (min_free_list)
+#define NUM_GEN2_MANTISSA_BITS (4)
+#define NUM_GEN2_ALIST (200)
 #ifdef HOST_64BIT
     // bucket 0 contains sizes less than 256
-#define BASE_GEN2_ALIST_BITS (7)
+#define BASE_GEN2_ALIST_BITS (3)
 #else
     // bucket 0 contains sizes less than 128
-#define BASE_GEN2_ALIST_BITS (6)
+#define BASE_GEN2_ALIST_BITS (2)
 #endif // HOST_64BIT
     PER_HEAP
     alloc_list gen2_alloc_list[NUM_GEN2_ALIST-1];
 
-#define NUM_POH_ALIST (19)
+#define POH_MIN_SIZE    (min_free_list)
+#define NUM_POH_MANTISSA_BITS (4)
+#define NUM_POH_ALIST (200)
     // bucket 0 contains sizes less than 256
-#define BASE_POH_ALIST_BITS (7)
+#define BASE_POH_ALIST_BITS (3)
     PER_HEAP
     alloc_list poh_alloc_list[NUM_POH_ALIST-1];
 
