@@ -701,7 +701,7 @@ public:
         unsigned long index = 0;
         _BitScanReverse64 (&index, s);
         assert (index >= mantissa_bits && index <= 63);
-        unsigned e = index - mantissa_bits - 1;
+        unsigned e = index - mantissa_bits + 1;
         unsigned f = (s >> (index - mantissa_bits)) & mantissa_mask;
         unsigned result = (e << mantissa_bits) | f;
         return result < num_buckets ? result : num_buckets-1;
