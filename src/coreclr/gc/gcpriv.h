@@ -654,11 +654,8 @@ public:
 
 class allocator
 {
-    size_t min_size;
-    int ignore_bits;
-    unsigned mantissa_bits;
-    unsigned mantissa_mask;
     unsigned int num_buckets;
+    unsigned int* bucket_sizes;
     alloc_list first_bucket;
     alloc_list* buckets;
     int gen_number;
@@ -667,15 +664,12 @@ class allocator
     void thread_free_item_end (uint8_t* free_item, uint8_t*& head, uint8_t*& tail, int bn);
 
 public:
-    allocator (unsigned int num_b, size_t min, int ib, int mb, alloc_list* b, int gen=-1);
+    allocator (unsigned int num_b, unsigned int* b_sizes, alloc_list* b, int gen=-1);
 
     allocator()
     {
         num_buckets = 1;
-        ignore_bits = sizeof(size_t) * 8 - 1;
-        mantissa_bits = 0;
-        mantissa_mask = 0;
-        min_size = ((size_t)1) << ignore_bits;
+
         // for young gens we just set it to 0 since we don't treat
         // them differently from each other
         gen_number = 0;
@@ -690,37 +684,23 @@ public:
     // there is always such bucket since the last one fits everything
     unsigned int first_suitable_bucket (size_t size)
     {
-        if (size < min_size)
+        if (num_buckets == 1)
             return 0;
 
-        size_t s = ((size - min_size) >> ignore_bits);
-        if (s <= mantissa_mask)
+        for (unsigned int i = 0; i < num_buckets; i++)
         {
-            return (unsigned)s;
+            if (size < bucket_sizes[i])
+                return i;
         }
-        unsigned long index = 0;
-        _BitScanReverse64 (&index, s);
-        assert (index >= mantissa_bits && index <= 63);
-        unsigned e = index - mantissa_bits + 1;
-        unsigned f = (s >> (index - mantissa_bits)) & mantissa_mask;
-        unsigned result = (e << mantissa_bits) | f;
-        return result < num_buckets ? result : num_buckets-1;
+
+        return num_buckets - 1;
     }
 
-    size_t size_from_bucket_number (unsigned int bn)
+    size_t min_size_from_bucket_number (unsigned int bn)
     {
-        unsigned e = bn >> mantissa_bits;
-        unsigned f = bn & mantissa_mask;
-        size_t s;
-        if (e == 0)
-        {
-            s = f;
-        }
-        else
-        {
-            s = (f + (1 << mantissa_bits)) << (e - 1);
-        }
-        return (s << ignore_bits) + min_size;
+        if (bn == 0)
+            return 0;
+        return bucket_sizes[bn-1];
     }
 
     unsigned first_suitable_bucket_for_allocation (size_t size)
@@ -728,14 +708,14 @@ public:
         if (num_buckets <= 1)
             return 0;
         unsigned bn = first_suitable_bucket (size);
-        if ((bn < num_buckets - 1) && (size_from_bucket_number (bn) < size))
+        if ((bn < num_buckets - 1) && (min_size_from_bucket_number (bn) < size))
             bn++;
         return bn;
     }
 
     size_t first_bucket_size()
     {
-        return min_size;
+        return min_size_from_bucket_number (0);
     }
 
     uint8_t*& alloc_list_head_of (unsigned int bn)
