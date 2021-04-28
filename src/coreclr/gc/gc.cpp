@@ -16705,9 +16705,9 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
 
                         remove_gen_free (gen->gen_num, free_list_size);
 
-                        if (record_free_list_allocated_p)
+//                        if (record_free_list_allocated_p)
                         {
-                            generation_set_bgc_mark_bit_p (gen) = should_set_bgc_mark_bit (free_list);
+                            generation_set_bgc_mark_bit_p(gen) = TRUE;// should_set_bgc_mark_bit (free_list);
                             dprintf (3333, ("SFA: %Ix->%Ix(%d)", free_list, (free_list + free_list_size),
                                 (generation_set_bgc_mark_bit_p (gen) ? 1 : 0)));
                         }
@@ -16763,9 +16763,9 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
                             heap_number, free_list_size, gen2_removed_no_undo));
                     }
 
-                    if (record_free_list_allocated_p)
+//                    if (record_free_list_allocated_p)
                     {
-                        generation_set_bgc_mark_bit_p (gen) = should_set_bgc_mark_bit (free_list);
+                        generation_set_bgc_mark_bit_p(gen) = TRUE; // should_set_bgc_mark_bit(free_list);
                         dprintf (3333, ("SF: %Ix(%d)", free_list, (generation_set_bgc_mark_bit_p (gen) ? 1 : 0)));
                     }
 #endif //DOUBLY_LINKED_FL
@@ -16937,9 +16937,9 @@ finished:
 #ifdef DOUBLY_LINKED_FL
             if (generation_set_bgc_mark_bit_p (gen))
             {
-                dprintf (2, ("IOM: %Ix(->%Ix(%Id) (%Ix-%Ix)", old_loc, result, pad,
-                        (size_t)(&mark_array [mark_word_of (result)]),
-                        (size_t)(mark_array [mark_word_of (result)])));
+                //dprintf (2, ("IOM: %Ix(->%Ix(%Id) (%Ix-%Ix)", old_loc, result, pad,
+                //        (size_t)(&mark_array [mark_word_of (result)]),
+                //        (size_t)(mark_array [mark_word_of (result)])));
 
                 set_plug_bgc_mark_bit (old_loc);
             }
@@ -29307,7 +29307,7 @@ void  gc_heap::gcmemcopy (uint8_t* dest, uint8_t* src, size_t len, BOOL copy_car
         memcopy (dest - plug_skew, src - plug_skew, len);
 
 #ifdef DOUBLY_LINKED_FL
-        if (set_bgc_mark_bits_p)
+        if (set_bgc_mark_bits_p && should_set_bgc_mark_bit(dest))
         {
             uint8_t* dest_o = dest;
             uint8_t* dest_end_o = dest + len;

@@ -141,8 +141,8 @@ void StressLog::Leave(CRITSEC_COOKIE) {
 }
 
 /*********************************************************************************/
-void StressLog::Initialize(unsigned facilities, unsigned level, unsigned maxBytesPerThread,
-    unsigned maxBytesTotal, void* moduleBase, LPWSTR logFilename)
+void StressLog::Initialize(unsigned facilities, unsigned level, unsigned maxBytesPerThreadArg,
+    unsigned maxBytesTotalArg, void* moduleBase, LPWSTR logFilename)
 {
     STATIC_CONTRACT_LEAF;
 
@@ -154,15 +154,19 @@ void StressLog::Initialize(unsigned facilities, unsigned level, unsigned maxByte
 
     theLog.lock = ClrCreateCriticalSection(CrstStressLog, (CrstFlags)(CRST_UNSAFE_ANYMODE | CRST_DEBUGGER_THREAD | CRST_TAKEN_DURING_SHUTDOWN));
     // StressLog::Terminate is going to free memory.
+    size_t maxBytesPerThread = maxBytesPerThreadArg;
     if (maxBytesPerThread < STRESSLOG_CHUNK_SIZE)
     {
-        maxBytesPerThread = STRESSLOG_CHUNK_SIZE;
+        // in this case, interpret the number as GB
+        maxBytesPerThread *= (1024*1024*1024);
     }
-    theLog.MaxSizePerThread = maxBytesPerThread;
+    theLog.MaxSizePerThread = (unsigned)(maxBytesPerThread,0xffffffff);
 
+    size_t maxBytesTotal = maxBytesTotalArg;
     if (maxBytesTotal < STRESSLOG_CHUNK_SIZE * 256)
     {
-        maxBytesTotal = STRESSLOG_CHUNK_SIZE * 256;
+        // in this case, interpret the number as GB
+        maxBytesTotal *= (1024 * 1024 * 1024);
     }
     theLog.MaxSizeTotal = (unsigned)min(maxBytesTotal, 0xffffffff);;
     theLog.totalChunk = 0;
