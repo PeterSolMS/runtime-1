@@ -35769,7 +35769,7 @@ size_t gc_heap::desired_new_allocation (dynamic_data* dd,
 #ifdef BGC_SERVO_TUNING
                     !bgc_tuning::fl_tuning_triggered &&
 #endif //BGC_SERVO_TUNING
-                    (dd_fragmentation (dd) > ((size_t)((f-1)*current_size))))
+                    (2*dd_fragmentation (dd) > ((size_t)((f-1)*current_size))))
                 {
                     //reducing allocation in case of fragmentation
                     size_t new_allocation1 = max (min_gc_size,

@@ -80,7 +80,7 @@ inline void FATAL_GC_ERROR()
 #define SHORT_PLUGS //used to keep ephemeral plugs short so they fit better into the oldest generation free items
 
 #ifdef SHORT_PLUGS
-#define DESIRED_PLUG_LENGTH (1000)
+#define DESIRED_PLUG_LENGTH (60)
 #endif //SHORT_PLUGS
 
 #define FEATURE_PREMORTEM_FINALIZATION
@@ -613,8 +613,8 @@ typedef DPTR(class CFinalize)                  PTR_CFinalize;
 //generation free list. It is an array of free lists bucketed by size, starting at sizes lower than (1 << first_bucket_bits)
 //and doubling each time. The last bucket (index == num_buckets) is for largest sizes with no limit
 
-#define MAX_SOH_BUCKET_COUNT (201)//Max number of buckets for the SOH generations.
-#define MAX_BUCKET_COUNT (201)//Max number of buckets.
+#define MAX_SOH_BUCKET_COUNT (2048)//Max number of buckets for the SOH generations.
+#define MAX_BUCKET_COUNT (2049)//Max number of buckets.
 class alloc_list
 {
 #ifdef DOUBLY_LINKED_FL
@@ -4333,19 +4333,19 @@ protected:
 
 #endif //SYNCHRONIZATION_STATS
 
-#define NUM_LOH_ALIST (200)
+#define NUM_LOH_ALIST (2048)
     // bucket 0 contains sizes less than 64*1024
     // the "BITS" number here is the highest bit in 64*1024 - 1, zero-based as in BitScanReverse.
     // see first_suitable_bucket(size_t size) for details.
 #define LOH_MIN_SIZE (64*1024)
-#define NUM_LOH_MANTISSA_BITS (4)
+#define NUM_LOH_MANTISSA_BITS (8)
 #define BASE_LOH_ALIST_BITS (15)
     PER_HEAP
     alloc_list loh_alloc_list[NUM_LOH_ALIST-1];
 
 #define GEN2_MIN_SIZE (min_free_list)
-#define NUM_GEN2_MANTISSA_BITS (4)
-#define NUM_GEN2_ALIST (200)
+#define NUM_GEN2_MANTISSA_BITS (8)
+#define NUM_GEN2_ALIST (2048)
 #ifdef HOST_64BIT
     // bucket 0 contains sizes less than 256
 #define BASE_GEN2_ALIST_BITS (3)
@@ -4357,8 +4357,8 @@ protected:
     alloc_list gen2_alloc_list[NUM_GEN2_ALIST-1];
 
 #define POH_MIN_SIZE    (min_free_list)
-#define NUM_POH_MANTISSA_BITS (4)
-#define NUM_POH_ALIST (200)
+#define NUM_POH_MANTISSA_BITS (8)
+#define NUM_POH_ALIST (2048)
     // bucket 0 contains sizes less than 256
 #define BASE_POH_ALIST_BITS (3)
     PER_HEAP
